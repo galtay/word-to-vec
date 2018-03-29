@@ -103,7 +103,7 @@ for iepoch in range(n_epochs):
         expu = np.exp(u)
         y = expu / np.sum(expu)
 
-        # calculate training sample loss ... Jsamp = -log p(w_context|w_center)
+        # calculate training sample loss ... Jsamp = -log p(w_center|w_context)
         Jsamp = -(u[center_indx, 0] - np.log(np.sum(expu)))
         Jtot += Jsamp
 
