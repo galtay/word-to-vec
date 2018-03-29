@@ -7,12 +7,19 @@ groups of words we will scan windows over.
 https://github.com/RaRe-Technologies/gensim/blob/develop/gensim/models/word2vec.py
 https://github.com/cbellei/word2veclite
 
+
+skipgram:
+  predict context word(s) from center word
+
+cbow:
+  predict center word from context word(s)
+
 """
 import matplotlib.pyplot as plt
 import numpy as np
 TOL = 1.0e-7
 
-corpus = ['I like playing football with my frients'.split()]
+corpus = ['I like playing football with my friends'.split()]
 
 # create vocab
 word2indx = {}
@@ -23,8 +30,8 @@ for sentence in corpus:
             word2indx[word] = len(word2indx)
 
 
-back_window = 1
-front_window = 1
+back_window = 2
+front_window = 2
 
 
 embd_size = 5
@@ -37,7 +44,31 @@ W1 = 1.0 * (np.random.rand(vocab_size, embd_size) - 0.5)
 W2 = 1.0 * (np.random.rand(embd_size, vocab_size) - 0.5)
 
 
+def create_batch(corpus, back_window, front_window, word2indx):
+    word_tups = []
+    indx_tups = []
+    for sentence in corpus:
+        for si_center_word, center_word in enumerate(sentence):
+            si_min_context_word = max(0, si_center_word - back_window)
+            si_max_context_word = min(len(sentence)-1, si_center_word + front_window)
+            si_context_words = [
+                si for si in range(si_min_context_word, si_max_context_word + 1)
+                if si != si_center_word]
+            context_words = [sentence[si] for si in si_context_words]
+            center_indx = word2indx[center_word]
+            context_indxs = [word2indx[word] for word in context_words]
+
+            print(center_word, context_words)
+            word_tups.append((center_word, context_words))
+            indx_tups.append((center_indx, context_indxs))
+    return indx_tups
+
+
+
+
 # one update per epoch (batch SGD)
+# CBOW: input = average context words
+#       output = center word
 Jarr = []
 for iepoch in range(n_epochs):
     print('iepoch = {}'.format(iepoch))
@@ -45,57 +76,46 @@ for iepoch in range(n_epochs):
     dedw2 = np.zeros_like(W2)
     Jtot = 0
     isample = 0
+    indx_tups = create_batch(corpus, back_window, front_window, word2indx)
 
-    for sentence in corpus:
-        for i_center_word, center_word in enumerate(sentence):
-            i_min_context_word = max(0, i_center_word - back_window)
-            i_max_context_word = min(len(sentence), i_center_word + front_window + 1)
-            for i_context_word in range(i_min_context_word, i_max_context_word):
-                if i_center_word == i_context_word:
-                    continue
+    for center_indx, context_indxs in indx_tups:
+        isample += 1
 
-                isample += 1
-                context_word = sentence[i_context_word]
-                center_indx = word2indx[center_word]
-                context_indx = word2indx[context_word]
-                #print(center_word, center_indx, context_word, context_indx)
+        # create one-hot encoded center word vector (i.e. the output)
+        y_1hot = np.zeros((vocab_size, 1))
+        y_1hot[center_indx, 0] = 1
 
-                # create one-hot encoded center word vector
-                x_1hot = np.zeros((1, vocab_size))
-                x_1hot[0, center_indx] = 1
+        # create average one-hot encoded context vector (i.e. the input)
+        x_1hot = np.zeros((vocab_size, 1))
+        x_1hot[context_indxs, 0] = 1/len(context_indxs)
 
-                # create one-hot encoded context word vector
-                y_1hot = np.zeros((1, vocab_size))
-                y_1hot[0, context_indx] = 1
+        # calculate hidden activations with matmul
+        h_mm = np.matmul(W1.T, x_1hot)
 
-                # calculate hidden activations with matmul
-                h_mm = np.matmul(x_1hot, W1)
+        # calculate hidden activations by selecting/averaging rows
+        h_se = W1[context_indxs, :].T.sum(axis=1, keepdims=True) / len(context_indxs)
 
-                # calculate hidden activations by selection a row
-                h_se = W1[center_indx:center_indx+1, :]
+        assert(np.abs(np.sum(h_mm - h_se)) < TOL)
+        h = h_se
 
-                assert(np.abs(np.sum(h_mm - h_se)) < TOL)
-                h = h_se
+        # calculate output vector
+        u = np.matmul(W2.T, h)
+        expu = np.exp(u)
+        y = expu / np.sum(expu)
 
-                # calculate output vector
-                u = np.matmul(h, W2)
-                expu = np.exp(u)
-                y = expu / np.sum(expu)
+        # calculate training sample loss ... Jsamp = -log p(w_context|w_center)
+        Jsamp = -(u[center_indx, 0] - np.log(np.sum(expu)))
+        Jtot += Jsamp
 
-                # calculate training sample loss ... Jsamp = -log p(w_context|w_center)
-                Jsamp = -(u[0, context_indx] - np.log(np.sum(expu)))
-                Jtot += Jsamp
-                #print('Jsamp={}'.format(Jsamp))
+        # calculate output error
+        dedu = y - y_1hot
 
-                # calculate output error
-                dedu = y - y_1hot
+        # calculate update to W2
+        dedw2 += np.matmul(h, dedu.T)
 
-                # calculate update to W2
-                dedw2 += np.matmul(h.T, dedu)
-
-                # calculate update to W1
-                dedh = np.matmul(dedu, W2.T)
-                dedw1 += np.matmul(x_1hot.T, dedh)
+        # calculate update to W1
+        dedh = np.matmul(W2, dedu)
+        dedw1 += np.matmul(x_1hot, dedh.T)
 
     W1 -= learning_rate * dedw1
     W2 -= learning_rate * dedw2
