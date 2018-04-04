@@ -55,6 +55,8 @@ embd_size = 20
 vocab_size = len(word2indx)
 learning_rate = 0.001
 n_epochs = 30
+batch_size = 500
+
 
 # create weight matrices
 fac = np.sqrt(6) / np.sqrt(embd_size + vocab_size)
@@ -83,17 +85,21 @@ def create_batch(corpus, back_window, front_window, word2indx):
 
 
 
-# one update per epoch (batch gradient descent)
+# one update per batch (mini batch gradient descent)
 # CBOW: input = average context words
 #       output = center word
 Jarr = []
+dedw1 = np.zeros_like(W1)
+dedw2 = np.zeros_like(W2)
+Jtot = 0
+isample = 0
+ibatch = 0
+
 for iepoch in range(n_epochs):
     print('iepoch = {}'.format(iepoch))
-    dedw1 = np.zeros_like(W1)
-    dedw2 = np.zeros_like(W2)
-    Jtot = 0
-    isample = 0
+
     indx_tups = create_batch(corpus, back_window, front_window, word2indx)
+    np.random.shuffle(indx_tups)
 
     for center_indx, context_indxs in indx_tups:
         if len(context_indxs) == 0:
@@ -111,7 +117,6 @@ for iepoch in range(n_epochs):
         x_1hot = np.zeros((vocab_size, 1))
         for indx in context_indxs:
             x_1hot[indx, 0] += 1 / len(context_indxs)
-
 
         # calculate hidden activations with matmul
         h_mm = np.matmul(W1.T, x_1hot)
@@ -141,8 +146,14 @@ for iepoch in range(n_epochs):
         dedh = np.matmul(W2, dedu)
         dedw1 += np.matmul(x_1hot, dedh.T)
 
-    W1 -= learning_rate * dedw1
-    W2 -= learning_rate * dedw2
-    Jtot /= isample
-    Jarr.append(Jtot)
-    print('Jtot={}'.format(Jtot))
+        if isample % batch_size == 0 and isample != 0:
+            ibatch += 1
+            W1 -= learning_rate * dedw1
+            W2 -= learning_rate * dedw2
+            Jtot /= batch_size
+            Jarr.append(Jtot)
+            print('ibatch={}, Jtot={}'.format(ibatch, Jtot))
+
+            Jtot = 0
+            dedw1 = np.zeros_like(W1)
+            dedw2 = np.zeros_like(W2)
