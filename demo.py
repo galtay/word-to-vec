@@ -15,11 +15,27 @@ cbow:
   predict center word from context word(s)
 
 """
+import string
 import matplotlib.pyplot as plt
+import nltk
 import numpy as np
+
 TOL = 1.0e-7
 
-corpus = ['I like playing football with my friends'.split()]
+def nano_corpus():
+    return ['the rain in spain falls mostly on the plain'.split()]
+
+def austen_emma_corpus():
+    punctuation = set(string.punctuation)
+    raw_corpus = nltk.corpus.gutenberg.sents('austen-emma.txt')
+    corpus = []
+    for sent in raw_corpus:
+        corpus.append([word.lower() for word in sent if word not in punctuation])
+    return corpus
+
+
+corpus = austen_emma_corpus()
+
 
 # create vocab
 word2indx = {}
@@ -28,20 +44,22 @@ for sentence in corpus:
     for word in sentence:
         if word not in word2indx:
             word2indx[word] = len(word2indx)
+indx2word = {indx:word for word, indx in word2indx.items()}
 
 
 back_window = 2
 front_window = 2
 
 
-embd_size = 5
+embd_size = 20
 vocab_size = len(word2indx)
-learning_rate = 0.01
-n_epochs = 300
+learning_rate = 0.001
+n_epochs = 30
 
 # create weight matrices
-W1 = 1.0 * (np.random.rand(vocab_size, embd_size) - 0.5)
-W2 = 1.0 * (np.random.rand(embd_size, vocab_size) - 0.5)
+fac = np.sqrt(6) / np.sqrt(embd_size + vocab_size)
+W1 = fac * (np.random.rand(vocab_size, embd_size) - 0.5)
+W2 = fac * (np.random.rand(embd_size, vocab_size) - 0.5)
 
 
 def create_batch(corpus, back_window, front_window, word2indx):
@@ -58,15 +76,14 @@ def create_batch(corpus, back_window, front_window, word2indx):
             center_indx = word2indx[center_word]
             context_indxs = [word2indx[word] for word in context_words]
 
-            print(center_word, context_words)
+            #print(center_word, context_words)
             word_tups.append((center_word, context_words))
             indx_tups.append((center_indx, context_indxs))
     return indx_tups
 
 
 
-
-# one update per epoch (batch SGD)
+# one update per epoch (batch gradient descent)
 # CBOW: input = average context words
 #       output = center word
 Jarr = []
@@ -79,6 +96,8 @@ for iepoch in range(n_epochs):
     indx_tups = create_batch(corpus, back_window, front_window, word2indx)
 
     for center_indx, context_indxs in indx_tups:
+        if len(context_indxs) == 0:
+            continue
         isample += 1
 
         # create one-hot encoded center word vector (i.e. the output)
@@ -86,8 +105,13 @@ for iepoch in range(n_epochs):
         y_1hot[center_indx, 0] = 1
 
         # create average one-hot encoded context vector (i.e. the input)
+        # need to handle the case where context_indxs has repeated values
+        # e.g. context_indxs = [11, 11, 45, 77] should produce a "one hot"
+        # vector with two entries = 0.25 and one entry = 0.5
         x_1hot = np.zeros((vocab_size, 1))
-        x_1hot[context_indxs, 0] = 1/len(context_indxs)
+        for indx in context_indxs:
+            x_1hot[indx, 0] += 1 / len(context_indxs)
+
 
         # calculate hidden activations with matmul
         h_mm = np.matmul(W1.T, x_1hot)
