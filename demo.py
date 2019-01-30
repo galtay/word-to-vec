@@ -1,105 +1,113 @@
 """
-At the lowest level we have "words".  These are the objects
-that we want to produce vectors for.  They are grouped into
-"sentences" but they need not be sentences.  They are just
-groups of words we will scan windows over.
+Pedagogical implementation of word2vec.
 
+References
 https://github.com/RaRe-Technologies/gensim/blob/develop/gensim/models/word2vec.py
 https://github.com/cbellei/word2veclite
-
-
-skipgram:
-  predict context word(s) from target word
 
 cbow:
   predict target word from context word(s)
 
+skipgram:
+  predict context word(s) from target word
+
+
 """
+from collections import Counter
+import json
 import string
-
-import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.decomposition import PCA
-
-from space_docs_big_idea import SpaceDocsBigIdea
-
+import os
 TOL = 1.0e-7
 
-corpus = SpaceDocsBigIdea('space_docs_big_idea.txt')
+# corpora are pre-tokenized in json format
+# each corpus is a list of lists of words
+# vocabs are lists of word, count pairs sorted by frequency
+#-------------------------------------------
 
-# create vocab
+corpus_name = 'space_docs_big_idea'
+#corpus_name = 'tng_scripts'
+
+corpus_path = os.path.join('corpora', corpus_name)
+corpus_file = os.path.join(corpus_path, 'corpus.json')
+vocab_file = os.path.join(corpus_path, 'vocab.json')
+
+with open(corpus_file, 'r') as fp:
+    corpus = json.load(fp)
+with open(vocab_file, 'r') as fp:
+    vocab = json.load(fp)
+
+
+# create word to index mapping and inverse
+#-------------------------------------------
 word2index = {}
 index2word = {}
-for sentence in corpus.iter_sentences():
-    for word in sentence:
-        if word not in word2index:
-            word2index[word] = len(word2index)
+for index, (word, count) in enumerate(vocab):
+    word2index[word] = len(word2index)
 index2word = {index:word for word, index in word2index.items()}
 
 
-back_window = 2
-front_window = 2
-embd_size = 20
-vocab_size = len(word2index)
+# set word2vec parameters
+#-------------------------------------------
+back_window = 4
+front_window = 4
 learning_rate = 0.05
-n_epochs = 100
-batch_size = 500
 shuffle = True
+vocab_size = len(vocab)
+if corpus_name == 'space_docs_big_idea':
+    embd_size = 10
+    batch_size = 50
+    n_epochs = 500
+elif corpus_name == 'tng_scripts':
+    embd_size = 100
+    batch_size = 5000
+    n_epochs = 2
+else:
+    raise ValueError('corpus name not recognized')
 
-
-# create weight matrices
-fac = np.sqrt(6) / np.sqrt(embd_size + vocab_size)
-W1 = fac * (np.random.rand(vocab_size, embd_size) - 0.5)
-W2 = fac * (np.random.rand(embd_size, vocab_size) - 0.5)
-
-# one update per batch (mini batch gradient descent)
-J_history = []
-isample = 0
-ibatch = 0
 
 
 def cbow_on_sample(sample, vocab_size, word2index):
+    """Continuous Bag of Words model on one sample."""
 
     target_word, context_words = sample
 
-    # create one-hot encoded target word vector
-    target_index = word2index[target_word]
-    target_1hot = np.zeros((vocab_size, 1))
-    target_1hot[target_index, 0] = 1
-
-    # create one-hot encoded context word vectors
+    # create (V x 1) average "one-hot" encoded context word vectors for input
     context_indices = [word2index[word] for word in context_words]
-    context_1hots = []
-    for context_index in context_indices:
-        context_1hot = np.zeros((vocab_size, 1))
-        context_1hot[context_index, 0] = 1
-        context_1hots.append(context_1hot)
-
-    # create average one-hot encoded context vector (i.e. the input)
+    cfac = 1 / len(context_indices)
     x_1hot = np.zeros((vocab_size, 1))
-    for context_1hot in context_1hots:
-        x_1hot += context_1hot / len(context_indices)
+    for context_index in context_indices:
+        x_1hot[context_index, 0] += cfac
 
-    # calculate hidden activations with matmul
-    h_mm = np.matmul(W1.T, x_1hot)
-
-    # calculate hidden activations by selecting/averaging rows
-    h_se = W1[context_indices, :].T.sum(axis=1, keepdims=True) / len(context_indices)
-
-    assert(np.abs(np.sum(h_mm - h_se)) < TOL)
-    hh = h_se
-
-    # create one-hot encoded target word vector (i.e. the output)
+    # create (V x 1) one-hot encoded target word vector for output
+    target_index = word2index[target_word]
     y_1hot = np.zeros((vocab_size, 1))
     y_1hot[target_index, 0] = 1
 
+    # calculate hidden activations with matmul
+    # (N x V) . (V x 1) = (N x 1)
+    h_mm = np.matmul(W1.T, x_1hot)
+
+    # calculate hidden activations by selecting/averaging rows
+    # W1 has shape (V x N) so W1.T has shape (N x V)
+    # selecting rows from W1 and then transposing give h_se.shape = (N,1)
+    h_se = W1[context_indices, :].T.sum(axis=1, keepdims=True) * cfac
+
+    assert(np.max(np.abs(h_mm - h_se)) < TOL)
+    hh = h_se
+
     # calculate output vector
+    # W2 has shape (N x V) so W2.T has shape (V x N)
+    # uu has shape (V x N) . (N x 1) = (V x 1)
     uu = np.matmul(W2.T, hh)
+
+    # create a probability distribution (yy) via softmax
     expu = np.exp(uu)
-    yy = expu / np.sum(expu)
+    prob_norm = np.sum(expu)
+    yy = expu / prob_norm
 
     # calculate sample loss ... Jsamp = -log p(w_target|w_context)
-    Jsamp = -(uu[target_index, 0] - np.log(np.sum(expu)))
+    Jsamp = -(uu[target_index, 0] - np.log(prob_norm))
 
     # calculate output error
     dedu = yy - y_1hot
@@ -114,24 +122,64 @@ def cbow_on_sample(sample, vocab_size, word2index):
     return Jsamp, dedw1, dedw2
 
 
+
+def target_context_samples_from_sentence(sentence):
+    # iterate over target words in sentence
+    samples = []
+    for target_indx, target_word in enumerate(sentence):
+        min_context_indx = max(0, target_indx - back_window)
+        max_context_indx = min(len(sentence)-1, target_indx + front_window)
+        context_indices = [
+            indx for indx in range(min_context_indx, max_context_indx + 1)
+            if indx != target_indx]
+        context_words = [sentence[indx] for indx in context_indices]
+        samples.append((target_word, context_words))
+    return samples
+
+
+def grouper(iterable, n):
+    """Collect data into fixed-length chunks or blocks
+    https://docs.python.org/3/library/itertools.html"""
+    args = [iter(iterable)] * n
+    return zip(*args)
+
+
+
+all_samples = []
+# iterate over sentences in corpus
+for sentence in corpus:
+    all_samples.extend(target_context_samples_from_sentence(sentence))
+print('created {len(all_samples)} samples')
+
+
+# create/read weight matrices
+#-------------------------------------------
+
+#fac = np.sqrt(6) / np.sqrt(embd_size + vocab_size)
+#W1 = fac * (np.random.rand(vocab_size, embd_size) - 0.5)
+#W2 = fac * (np.random.rand(embd_size, vocab_size) - 0.5)
+#np.savetxt(f'W1_{corpus_name}.csv', W1, delimiter=',')
+#np.savetxt(f'W2_{corpus_name}.csv', W2, delimiter=',')
+
+W1 = np.loadtxt(f'W1_{corpus_name}.csv', delimiter=',')
+W2 = np.loadtxt(f'W2_{corpus_name}.csv', delimiter=',')
+
+# one update per batch (mini batch gradient descent)
+J_batch_history = []
+J_epoch_history = []
+isample = 0
+
+
 for iepoch in range(n_epochs):
-    print('iepoch = {}'.format(iepoch))
+    J_epoch = 0
 
-    corpus_iter = corpus.iter_target_context_batch(
-        back_window=back_window,
-        front_window=front_window,
-        batch_size=batch_size,
-        shuffle=shuffle,
-    )
-
-    for batch in corpus_iter:
-        ibatch += 1
-
+    for ibatch, batch in enumerate(grouper(all_samples, batch_size)):
         dedw1_batch = np.zeros_like(W1)
         dedw2_batch = np.zeros_like(W2)
         J_batch = 0
-        for sample in batch:
 
+        for sample in batch:
+            # skip samples with no context words
             target_word, context_words = sample
             if len(context_words) == 0:
                 continue
@@ -145,14 +193,9 @@ for iepoch in range(n_epochs):
         W1 -= learning_rate * dedw1_batch
         W2 -= learning_rate * dedw2_batch
         J_batch /= len(batch)
-        J_history.append(J_batch)
-        print('ibatch={}, J_batch={}'.format(ibatch, J_batch))
+        J_batch_history.append(J_batch)
+        J_epoch += J_batch
 
-
-pca = PCA(n_components=2)
-for index, word in index2word.items():
-    print(index, word)
-    sims = W1.dot(W1[index,:])
-    max_indices = np.argsort(-sims)[:10]
-    for ii in max_indices:
-        print('    ', index2word[ii])
+    J_epoch /= (ibatch+1)
+    J_epoch_history.append(J_epoch)
+    print('iepoch={}, J_epoch={}'.format(iepoch, J_epoch))
