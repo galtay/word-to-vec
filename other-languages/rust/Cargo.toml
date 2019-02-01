@@ -1,0 +1,14 @@
+[package]
+name = "_word2vec"
+version = "0.1.0"
+authors = ["Stephan Wolski"]
+edition = "2018"
+
+[features]
+default = ["json"]
+json = ["serde_json"]
+
+[dependencies]
+regex = "1.1.0"
+arrayfire = "3.6.0"
+serde_json = { version = "1.0.37", optional = true }
