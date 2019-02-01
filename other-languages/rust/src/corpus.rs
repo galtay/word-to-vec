@@ -9,47 +9,63 @@ pub struct Corpus {
 }
 
 impl Corpus {
-    pub fn from_file<P: AsRef<std::path::Path>>(file_path: P) -> std::io::Result<Corpus> {
+    pub fn from_file_text<P: AsRef<std::path::Path>>(file_path: P) -> std::io::Result<Corpus> {
         let sentence_regex = Regex::new("[.!?\n]+").unwrap();
         let word_regex = Regex::new(
             "(?:\\s+(?:a|an|the|it|is)(?:\\s+|$)|[\"#$%&()*+,-/:;<=>?@\\[\\\\\\]^_`\\{|\\}~\\s]|'s|'re)+",
         )
         .unwrap();
         let file_content = std::fs::read_to_string(file_path)?.to_lowercase();
+
+        Ok(Self::build_corpus(
+            sentence_regex
+                .split(&file_content)
+                .map(|x| x.trim())
+                .filter(|x| x.len() > 0)
+                .map(|s| word_regex.split(s)),
+        ))
+    }
+
+    #[cfg(feature = "json")]
+    pub fn from_file_json<P: AsRef<std::path::Path>>(file_path: P) -> std::io::Result<Corpus> {
+        let reader = std::io::BufReader::new(std::fs::File::open(file_path)?);
+        Ok(Self::build_corpus(
+            serde_json::from_reader::<_, Vec<Vec<String>>>(reader)
+                .map(|data| data.into_iter().map(|s| s.into_iter()))?,
+        ))
+    }
+
+    fn build_corpus<I: Iterator<Item = II>, II: Iterator<Item = S>, S>(parsed_text: I) -> Corpus
+    where
+        S: AsRef<str>,
+    {
         let mut id_to_token: Vec<String> = Vec::default();
         let mut token_to_id: std::collections::HashMap<String, TokenID> =
             std::collections::HashMap::default();
 
-        // Split up the source text into a 2D array of sentences and words
-        let source_text: Vec<Vec<TokenID>> = sentence_regex
-            .split(&file_content)
-            .map(|x| x.trim())
-            .filter(|x| x.len() > 0)
+        let source_text: Vec<Vec<TokenID>> = parsed_text
             .map(|s| {
-                word_regex
-                    .split(s)
-                    .filter(|x| x.len() > 1) // Filter out empty or one word sentences
-                    .map(|w| {
-                        let token = token_to_id.get(w);
-                        if token.is_none() {
-                            let id = id_to_token.len();
-                            let word = String::from(w);
-                            id_to_token.push(word.clone());
-                            token_to_id.insert(word, id);
-                            id
-                        } else {
-                            *token.unwrap()
-                        }
-                    })
-                    .collect()
+                s.map(|w| {
+                    let token = token_to_id.get(w.as_ref());
+                    if token.is_none() {
+                        let id = id_to_token.len();
+                        let word = String::from(w.as_ref());
+                        id_to_token.push(word.clone());
+                        token_to_id.insert(word, id);
+                        id
+                    } else {
+                        *token.unwrap()
+                    }
+                })
+                .collect()
             })
             .collect();
 
-        Ok(Corpus {
+        Corpus {
             source_text,
             id_to_token,
             token_to_id,
-        })
+        }
     }
 
     pub fn get_token_by_id(&self, id: TokenID) -> Option<&str> {

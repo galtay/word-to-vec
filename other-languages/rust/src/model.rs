@@ -31,7 +31,7 @@ fn af_one_hot(n: u64, hot_index: u64) -> Array {
         n,
         1,
         &[1.0f32],
-        &[n as i32],
+        &[hot_index as i32],
         &[0],
         arrayfire::SparseFormat::CSR,
     )
@@ -42,13 +42,16 @@ impl Model {
         let fac = f32::sqrt(6.0) / f32::sqrt((EMBD_SIZE + corpus.vocabulary_size()) as f32);
 
         // Create the weight matrixes with random values
-        let mut w1: Array =
+        let w1: Array =
             arrayfire::randu(af_n_by_m(corpus.vocabulary_size() as u64, EMBD_SIZE as u64));
-        let mut w2: Array =
+        let w2: Array =
             (arrayfire::randu::<f32>(af_n_by_m(EMBD_SIZE as u64, corpus.vocabulary_size() as u64))
                 - 0.5f32)
                 * fac;
+        Self::from_corpus_with_weights(corpus, w1, w2)
+    }
 
+    pub fn from_corpus_with_weights(corpus: &Corpus, mut w1: Array, mut w2: Array) {
         let data: Vec<(TokenID, Vec<TokenID>)> = corpus
             .batch(BACK_WINDOW, FRONT_WINDOW)
             .into_iter()
